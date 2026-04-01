@@ -1,0 +1,10 @@
+{
+  "name": "baby-monitor-server",
+  "version": "1.0.0",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.18.0",
+    "ws": "^8.13.0",
+    "mqtt": "^5.0.0"
+  }
+}
