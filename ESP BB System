@@ -1,0 +1,579 @@
+#include <Wire.h>
+#include <Adafruit_MLX90614.h>
+#include <Arduino.h>
+#include "Seeed_Arduino_mmWave.h"
+#include <HardwareSerial.h>
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <driver/i2s.h>
+#include "ESP32MQTTClient.h"
+
+#define ENABLE_SMTP
+#include <ReadyMail.h>
+
+// ---- Credentials ----
+#define WIFI_SSID           "PLUSNET-5CC3QH"
+#define WIFI_PASSWORD       "JoggNetwork2020"
+
+// ---- SMTP (already working) ----
+#define SMTP_HOST           "smtp-relay.brevo.com"
+#define SMTP_PORT           465
+#define SMTP_USERNAME       "a68c4e001@smtp-brevo.com"
+#define SENDER_APP_PASSWORD "YzBDJ8ZvCdTk7bwP"
+#define SENDER_EMAIL        "pjhogg2014@gmail.com"
+#define RECIPIENT_EMAIL     "pjhogg2014@gmail.com"
+#define RECIPIENT_NAME      "Parent"
+
+//HiveMQ Cloud MQTT
+#define MQTT_HOST     "55bf30b3bf6c4d7388f56f89e23855bd.s1.eu.hivemq.cloud"
+#define MQTT_PORT     8883
+#define MQTT_USER     "BabyVitalsSystem"
+#define MQTT_PASS     "Password1234"
+#define MQTT_CLIENT   "BabyMonitor_ESP32"
+
+// MQTT Topics
+#define TOPIC_TEMPERATURE   "babymonitor/temperature"
+#define TOPIC_RADAR         "babymonitor/radar"
+#define TOPIC_ALERT         "babymonitor/alerts"
+#define TOPIC_STATUS        "babymonitor/status"
+
+//Render.com audio WebSocket
+// Set this after deploying server.js to Render
+#define AUDIO_SERVER_HOST   "your-app.onrender.com"
+#define AUDIO_SERVER_PORT   443
+#define AUDIO_SERVER_PATH   "/audio"
+
+// Hardware pins 
+#define I2C_SDA     42      // MLX90614 SDA
+#define I2C_SCL     41      // MLX90614 SCL
+#define RADAR_RX    47      // MR60BHA2 TX → ESP32 RX
+#define RADAR_TX    21      // MR60BHA2 RX → ESP32 TX
+#define I2S_WS       1      // INMP441 WS
+#define I2S_SCK      2      // INMP441 SCK
+#define I2S_SD      14      // INMP441 SD
+
+// Alert thresholds
+#define FEVER_THRESHOLD         38.0f   // °C object temp — fever alert
+#define HYPO_THRESHOLD          36.0f   // °C object temp — hypothermia alert
+#define BRADYPNOEA_THRESHOLD    30.0f   // bpm — low breathing rate alert
+#define TACHYPNOEA_THRESHOLD    60.0f   // bpm — high breathing rate alert
+#define BRADYCARDIA_THRESHOLD  100.0f   // bpm — low heart rate alert
+#define TACHYCARDIA_THRESHOLD  160.0f   // bpm — high heart rate alert
+#define NO_DETECT_TIMEOUT    20000UL    // ms — apnea alert if no detection
+
+#define READING_INTERVAL     30000UL    // ms between sensor publishes
+#define ALERT_COOLDOWN      300000UL    // ms between repeated alerts (5 min)
+#define INIT_GRACE_PERIOD    70000UL    // ms — radar settle time after boot
+
+// I2S audio config
+#define SAMPLE_RATE     16000
+#define AUDIO_BUF_LEN   512             // samples per DMA buffer
+
+// ================================================================
+// Objects
+// ================================================================
+
+// Radar
+HardwareSerial  mmWaveSerial(1);
+SEEED_MR60BHA2  mmWave;
+
+// IR temperature
+Adafruit_MLX90614 mlx;
+
+// MQTT
+ESP32MQTTClient mqttClient;
+
+// SMTP
+WiFiClientSecure smtpTls;
+SMTPClient       smtp(smtpTls);
+
+// Audio WebSocket
+WiFiClientSecure audioTls;
+
+// ================================================================
+// State variables
+// ================================================================
+
+// Radar readings — updated by updateRadar()
+float    currentBreathing  = 0.0f;
+float    currentHeartRate  = 0.0f;
+float    currentDistance   = 0.0f;
+bool     radarDetected     = false;
+unsigned long lastDetectedTime = 0;
+
+// Sensor timing
+unsigned long lastReadTime  = 0;
+
+// Per-condition alert cooldown timers
+unsigned long lastTempAlertTime     = 0;
+unsigned long lastBradypnoeaTime    = 0;
+unsigned long lastTachypnoeaTime    = 0;
+unsigned long lastBradycardiaTime   = 0;
+unsigned long lastTachycardiaTime   = 0;
+unsigned long lastApneaTime         = 0;
+
+// Audio WebSocket connection state
+bool audioConnected = false;
+
+// ================================================================
+// I2S microphone setup
+// ================================================================
+void setupI2S() {
+    i2s_config_t i2s_config = {
+        .mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX),
+        .sample_rate          = SAMPLE_RATE,
+        .bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT,
+        .channel_format       = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count        = 4,
+        .dma_buf_len          = AUDIO_BUF_LEN,
+        .use_apll             = false,
+        .tx_desc_auto_clear   = false,
+        .fixed_mclk           = 0
+    };
+    i2s_pin_config_t pin_config = {
+        .bck_io_num   = I2S_SCK,
+        .ws_io_num    = I2S_WS,
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num  = I2S_SD
+    };
+    i2s_driver_install(I2S_NUM_0, &i2s_config, 0, NULL);
+    i2s_set_pin(I2S_NUM_0, &pin_config);
+    Serial.println("I2S microphone ready.");
+}
+
+// ================================================================
+// Audio WebSocket — connect to Render server
+// ================================================================
+bool connectAudio() {
+    audioTls.setInsecure();
+    if (!audioTls.connect(AUDIO_SERVER_HOST, AUDIO_SERVER_PORT)) {
+        Serial.println("Audio server connect failed.");
+        return false;
+    }
+    audioTls.printf(
+        "GET %s HTTP/1.1\r\n"
+        "Host: %s\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "\r\n",
+        AUDIO_SERVER_PATH, AUDIO_SERVER_HOST
+    );
+    String response = "";
+    unsigned long t = millis();
+    while (millis() - t < 3000) {
+        if (audioTls.available()) {
+            String line = audioTls.readStringUntil('\n');
+            response += line;
+            if (line == "\r") break;
+        }
+    }
+    if (response.indexOf("101") > 0) {
+        Serial.println("Audio WebSocket connected.");
+        return true;
+    }
+    Serial.println("Audio WebSocket handshake failed.");
+    return false;
+}
+
+// ================================================================
+// Send one WebSocket binary frame to audio server
+// ================================================================
+void sendAudioFrame(uint8_t* data, size_t len) {
+    if (!audioTls.connected()) return;
+    uint8_t header[4];
+    header[0] = 0x82;           // FIN bit + binary opcode
+    if (len <= 125) {
+        header[1] = (uint8_t)len;
+        audioTls.write(header, 2);
+    } else {
+        header[1] = 126;
+        header[2] = (len >> 8) & 0xFF;
+        header[3] = len & 0xFF;
+        audioTls.write(header, 4);
+    }
+    audioTls.write(data, len);
+}
+
+// ================================================================
+// updateRadar() — poll MR60BHA2 via Seeed library
+// Updates global currentBreathing, currentHeartRate,
+// currentDistance, radarDetected
+// ================================================================
+void updateRadar() {
+    if (mmWave.update(100)) {
+        radarDetected    = true;
+        lastDetectedTime = millis();
+
+        float breath_rate;
+        if (mmWave.getBreathRate(breath_rate)) {
+            currentBreathing = breath_rate;
+            Serial.printf("Breath rate : %.2f bpm\n", currentBreathing);
+        }
+
+        float heart_rate;
+        if (mmWave.getHeartRate(heart_rate)) {
+            currentHeartRate = heart_rate;
+            Serial.printf("Heart rate  : %.2f bpm\n", currentHeartRate);
+        }
+
+        float distance;
+        if (mmWave.getDistance(distance)) {
+            currentDistance = distance;
+            Serial.printf("Distance    : %.2f m\n", currentDistance);
+        }
+
+        // Optional — print phase data for diagnostics
+        float total_phase, breath_phase, heart_phase;
+        if (mmWave.getHeartBreathPhases(total_phase, breath_phase, heart_phase)) {
+            Serial.printf("Phases — total: %.2f  breath: %.2f  heart: %.2f\n",
+                          total_phase, breath_phase, heart_phase);
+        }
+
+    } else {
+        radarDetected = false;
+    }
+}
+
+// ================================================================
+// SMTP alert — sends email and publishes alert to MQTT
+// condition: human-readable description of the alert
+// ================================================================
+void smtpCallback(SMTPStatus status) {
+    Serial.println(status.text);
+}
+
+void sendAlert(float objectTemp, String condition) {
+    Serial.println("Alert triggered: " + condition);
+
+    // Build MQTT alert payload
+    char alertBuf[256];
+    snprintf(alertBuf, sizeof(alertBuf),
+        "{\"condition\":\"%s\","
+        "\"temperature\":%.1f,"
+        "\"breathing\":%.0f,"
+        "\"heartrate\":%.0f,"
+        "\"detected\":%s,"
+        "\"ts\":%lu}",
+        condition.c_str(),
+        objectTemp,
+        currentBreathing,
+        currentHeartRate,
+        radarDetected ? "true" : "false",
+        (unsigned long)time(nullptr)
+    );
+    mqttClient.publish(TOPIC_ALERT, alertBuf, false, 1);
+
+    // Send SMTP email
+    smtp.connect(SMTP_HOST, SMTP_PORT, smtpCallback);
+    if (!smtp.isConnected()) {
+        Serial.println("SMTP connect failed — alert email not sent.");
+        return;
+    }
+    smtp.authenticate(SMTP_USERNAME, SENDER_APP_PASSWORD, readymail_auth_password);
+
+    SMTPMessage msg;
+    msg.headers.add(rfc822_from,
+        String("Baby Monitor <") + SENDER_EMAIL + ">");
+    msg.headers.add(rfc822_to,
+        String(RECIPIENT_NAME) + " <" + RECIPIENT_EMAIL + ">");
+    msg.headers.add(rfc822_subject,
+        "Baby Monitor Alert: " + condition);
+    msg.timestamp = time(nullptr);
+
+    // Plain text body
+    String textBody =
+        "Baby Monitor Alert\n\n"
+        "Condition       : " + condition + "\n"
+        "Temperature     : " + String(objectTemp, 1) + " C\n"
+        "Breathing rate  : " + String(currentBreathing, 0) + " bpm\n"
+        "Heart rate      : " + String(currentHeartRate, 0) + " bpm\n"
+        "Subject detected: " + String(radarDetected ? "Yes" : "No") + "\n"
+        "Distance        : " + String(currentDistance, 2) + " m\n\n"
+        "Please check on the infant.\n\n"
+        "Note: each alert condition is suppressed for 5 minutes after firing.\n"
+        "-- Baby Monitor System";
+    msg.text.body(textBody);
+
+    // HTML body
+    String htmlBody =
+        "<html><body style='font-family:sans-serif;max-width:520px;'>"
+        "<h2 style='color:#c0392b;'>Baby Monitor Alert</h2>"
+        "<p><strong>" + condition + "</strong></p>"
+        "<table style='border-collapse:collapse;width:100%;'>"
+
+        "<tr style='background:#f8f8f8;'>"
+        "<td style='padding:8px 12px;font-weight:bold;'>Temperature</td>"
+        "<td style='padding:8px 12px;color:#c0392b;font-size:18px;'>"
+        + String(objectTemp, 1) + " &deg;C</td></tr>"
+
+        "<tr>"
+        "<td style='padding:8px 12px;font-weight:bold;'>Breathing rate</td>"
+        "<td style='padding:8px 12px;'>" + String(currentBreathing, 0) + " bpm</td></tr>"
+
+        "<tr style='background:#f8f8f8;'>"
+        "<td style='padding:8px 12px;font-weight:bold;'>Heart rate</td>"
+        "<td style='padding:8px 12px;'>" + String(currentHeartRate, 0) + " bpm</td></tr>"
+
+        "<tr>"
+        "<td style='padding:8px 12px;font-weight:bold;'>Subject detected</td>"
+        "<td style='padding:8px 12px;'>"
+        + String(radarDetected ? "Yes" : "No") + "</td></tr>"
+
+        "<tr style='background:#f8f8f8;'>"
+        "<td style='padding:8px 12px;font-weight:bold;'>Distance</td>"
+        "<td style='padding:8px 12px;'>" + String(currentDistance, 2) + " m</td></tr>"
+
+        "</table>"
+        "<p style='margin-top:20px;font-size:15px;'>"
+        "<strong>Please check on the infant.</strong></p>"
+        "<p style='color:#aaa;font-size:11px;'>"
+        "Each alert condition is suppressed for 5 minutes after firing.</p>"
+        "</body></html>";
+    msg.html.body(htmlBody);
+
+    if (smtp.send(msg)) {
+        Serial.println("Alert email sent successfully.");
+    } else {
+        Serial.println("Alert email send failed.");
+    }
+}
+
+// ================================================================
+// evaluateAlerts() — check all conditions against thresholds
+// Each condition has its own cooldown timer
+// ================================================================
+void evaluateAlerts(float objectTemp) {
+    unsigned long now = millis();
+
+    // Only evaluate radar-based alerts after the initialisation grace period
+    bool gracePeriodOver = (now > INIT_GRACE_PERIOD);
+
+    // ---- Temperature alerts ----
+    if (objectTemp > FEVER_THRESHOLD) {
+        if (now - lastTempAlertTime >= ALERT_COOLDOWN) {
+            sendAlert(objectTemp,
+                "Fever detected: " + String(objectTemp, 1) + " C (threshold "
+                + String(FEVER_THRESHOLD, 1) + " C)");
+            lastTempAlertTime = now;
+        } else {
+            Serial.println("SUPPRESSED: Fever — cooldown active.");
+        }
+    } else if (objectTemp < HYPO_THRESHOLD && objectTemp > 20.0f) {
+        if (now - lastTempAlertTime >= ALERT_COOLDOWN) {
+            sendAlert(objectTemp,
+                "Low temperature: " + String(objectTemp, 1) + " C (threshold "
+                + String(HYPO_THRESHOLD, 1) + " C)");
+            lastTempAlertTime = now;
+        } else {
+            Serial.println("SUPPRESSED: Hypothermia — cooldown active.");
+        }
+    }
+
+    if (!gracePeriodOver) {
+        Serial.println("Radar alerts suppressed — initialisation grace period.");
+        return;
+    }
+
+    // ---- Apnea / no detection alert ----
+    if (!radarDetected &&
+        (now - lastDetectedTime >= NO_DETECT_TIMEOUT)) {
+        if (now - lastApneaTime >= ALERT_COOLDOWN) {
+            sendAlert(objectTemp,
+                "Breathing not detected — possible apnea (no signal for "
+                + String(NO_DETECT_TIMEOUT / 1000) + " seconds)");
+            lastApneaTime = now;
+        } else {
+            Serial.println("SUPPRESSED: Apnea — cooldown active.");
+        }
+    }
+
+    // ---- Breathing rate alerts (only if subject detected) ----
+    if (radarDetected && currentBreathing > 0) {
+        if (currentBreathing < BRADYPNOEA_THRESHOLD) {
+            if (now - lastBradypnoeaTime >= ALERT_COOLDOWN) {
+                sendAlert(objectTemp,
+                    "Low breathing rate: " + String(currentBreathing, 0)
+                    + " bpm (threshold " + String(BRADYPNOEA_THRESHOLD, 0) + " bpm)");
+                lastBradypnoeaTime = now;
+            } else {
+                Serial.println("SUPPRESSED: Bradypnoea — cooldown active.");
+            }
+        } else if (currentBreathing > TACHYPNOEA_THRESHOLD) {
+            if (now - lastTachypnoeaTime >= ALERT_COOLDOWN) {
+                sendAlert(objectTemp,
+                    "High breathing rate: " + String(currentBreathing, 0)
+                    + " bpm (threshold " + String(TACHYPNOEA_THRESHOLD, 0) + " bpm)");
+                lastTachypnoeaTime = now;
+            } else {
+                Serial.println("SUPPRESSED: Tachypnoea — cooldown active.");
+            }
+        }
+    }
+
+    // ---- Heart rate alerts (only if subject detected) ----
+    if (radarDetected && currentHeartRate > 0) {
+        if (currentHeartRate < BRADYCARDIA_THRESHOLD) {
+            if (now - lastBradycardiaTime >= ALERT_COOLDOWN) {
+                sendAlert(objectTemp,
+                    "Low heart rate: " + String(currentHeartRate, 0)
+                    + " bpm (threshold " + String(BRADYCARDIA_THRESHOLD, 0) + " bpm)");
+                lastBradycardiaTime = now;
+            } else {
+                Serial.println("SUPPRESSED: Bradycardia — cooldown active.");
+            }
+        } else if (currentHeartRate > TACHYCARDIA_THRESHOLD) {
+            if (now - lastTachycardiaTime >= ALERT_COOLDOWN) {
+                sendAlert(objectTemp,
+                    "High heart rate: " + String(currentHeartRate, 0)
+                    + " bpm (threshold " + String(TACHYCARDIA_THRESHOLD, 0) + " bpm)");
+                lastTachycardiaTime = now;
+            } else {
+                Serial.println("SUPPRESSED: Tachycardia — cooldown active.");
+            }
+        }
+    }
+}
+
+// ================================================================
+// publishSensorData() — publish all readings to MQTT dashboard
+// ================================================================
+void publishSensorData(float objectTemp, float ambientTemp) {
+    char buf[256];
+
+    // Temperature topic
+    snprintf(buf, sizeof(buf),
+        "{\"object\":%.1f,\"ambient\":%.1f,\"ts\":%lu}",
+        objectTemp, ambientTemp, (unsigned long)time(nullptr));
+    mqttClient.publish(TOPIC_TEMPERATURE, buf, false, 0);
+
+    // Radar topic
+    snprintf(buf, sizeof(buf),
+        "{\"breathing\":%.0f,\"heartrate\":%.0f,"
+        "\"distance\":%.2f,\"detected\":%s,\"ts\":%lu}",
+        currentBreathing, currentHeartRate, currentDistance,
+        radarDetected ? "true" : "false",
+        (unsigned long)time(nullptr));
+    mqttClient.publish(TOPIC_RADAR, buf, false, 0);
+
+    Serial.printf("MQTT published — Temp: %.1f C | BR: %.0f bpm | HR: %.0f bpm | "
+                  "Detected: %s\n",
+                  objectTemp, currentBreathing, currentHeartRate,
+                  radarDetected ? "Yes" : "No");
+}
+
+// ================================================================
+// setup()
+// ================================================================
+void setup() {
+    Serial.begin(115200);
+
+    // ---- I2C for MLX90614 ----
+    Wire.begin(I2C_SDA, I2C_SCL);
+    if (!mlx.begin()) {
+        Serial.println("ERROR: MLX90614 not found — check wiring.");
+        while (true) delay(1000);
+    }
+    Serial.println("MLX90614 ready.");
+
+    // ---- Radar UART ----
+    mmWaveSerial.begin(115200, SERIAL_8N1, RADAR_RX, RADAR_TX);
+    mmWave.begin(&mmWaveSerial);
+    Serial.println("MR60BHA2 radar initialised.");
+    lastDetectedTime = millis(); // start the no-detect timer from boot
+
+    // ---- I2S microphone ----
+    setupI2S();
+
+    // ---- Wi-Fi ----
+    Serial.printf("Connecting to %s", WIFI_SSID);
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+    }
+    Serial.printf("\nConnected. IP: %s\n", WiFi.localIP().toString().c_str());
+
+    // ---- NTP time sync ----
+    // Change first arg to 3600 during BST (March-October), 0 for GMT
+    configTime(3600, 0, "pool.ntp.org", "time.nist.gov");
+    Serial.print("Syncing NTP time");
+    time_t now = time(nullptr);
+    while (now < 100000) {
+        delay(200);
+        Serial.print(".");
+        now = time(nullptr);
+    }
+    Serial.println("\nTime synced.");
+
+    // ---- MQTT (non-blocking, runs in background FreeRTOS task) ----
+    mqttClient.setURI(MQTT_URI, MQTT_USER, MQTT_PASS);
+    mqttClient.setInsecure();           // skip cert verify for prototype
+    mqttClient.enableLastWillMessage(TOPIC_STATUS, "offline", true);
+    mqttClient.loopStart();             // returns immediately
+    Serial.println("MQTT connecting in background...");
+
+    // ---- Audio WebSocket ----
+    audioConnected = connectAudio();
+
+    Serial.println("System ready — monitoring started.");
+}
+
+// ================================================================
+// loop()
+// ================================================================
+void loop() {
+    unsigned long now = millis();
+
+    // ---- Stream audio continuously ----
+    if (audioConnected && audioTls.connected()) {
+        int16_t audioBuf[AUDIO_BUF_LEN];
+        size_t bytesRead = 0;
+        i2s_read(I2S_NUM_0, audioBuf, sizeof(audioBuf), &bytesRead, 0);
+        if (bytesRead > 0) {
+            sendAudioFrame((uint8_t*)audioBuf, bytesRead);
+        }
+    } else if (!audioConnected || !audioTls.connected()) {
+        // Attempt reconnect every 10 seconds
+        static unsigned long lastAudioRetry = 0;
+        if (now - lastAudioRetry > 10000) {
+            Serial.println("Reconnecting audio WebSocket...");
+            audioConnected = connectAudio();
+            lastAudioRetry = now;
+        }
+    }
+
+    // ---- Poll radar continuously ----
+    updateRadar();
+
+    // ---- Sensor reading and alert evaluation on interval ----
+    if (now - lastReadTime < READING_INTERVAL) return;
+    lastReadTime = now;
+
+    // Read MLX90614
+    float objectTemp  = mlx.readObjectTempC();
+    float ambientTemp = mlx.readAmbientTempC();
+
+    Serial.print("MLX90614 Object Temp: ");
+    Serial.print(objectTemp, 1);
+    Serial.println(" C");
+
+    Serial.printf("[%.0fs] Object: %.1f C | Ambient: %.1f C\n",
+                  now / 1000.0, objectTemp, ambientTemp);
+
+    // Validate reading — catches NaN and out-of-range values
+    if (isnan(objectTemp) || isnan(ambientTemp) ||
+        objectTemp > 50.0f || objectTemp < 20.0f) {
+        Serial.println("WARNING: Invalid temperature reading — skipping.");
+        return;
+    }
+
+    // Publish all sensor data to MQTT dashboard
+    publishSensorData(objectTemp, ambientTemp);
+
+    // Evaluate all alert conditions
+    evaluateAlerts(objectTemp);
+}
