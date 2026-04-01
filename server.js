@@ -46,10 +46,10 @@ audioServer.on('connection', (ws) => {
 });
 
 // ---- MQTT subscriber ----
-const mqttClient = mqtt.connect('mqtts://YOUR_CLUSTER.s1.eu.hivemq.cloud', {
+const mqttClient = mqtt.connect('55bf30b3bf6c4d7388f56f89e23855bd.s1.eu.hivemq.cloud', {
     port: 8883,
-    username: 'YOUR_HIVEMQ_USERNAME',
-    password: 'YOUR_HIVEMQ_PASSWORD'
+    username: 'BabyVitalsSystem',
+    password: 'Password1234'
 });
 
 mqttClient.on('connect', () => {
