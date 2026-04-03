@@ -19,7 +19,7 @@ app.get('/', (req, res) => {
 const wss = new WebSocketServer({ noServer: true });
  
 server.on('upgrade', (request, socket, head) => {
-    const pathname = new URL(request.url, http://${request.headers.host}).pathname;
+const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
  
     if (pathname === '/' || pathname === '/dashboard') {
         wss.handleUpgrade(request, socket, head, (ws) => {
