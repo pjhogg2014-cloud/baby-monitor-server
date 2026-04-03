@@ -49,6 +49,14 @@
     <button id="audioBtn" onclick="startAudio()">▶ Start Listening</button>
     <canvas id="audioChart" height="80"></canvas>
   </div>
+  <!-- Camera -->
+  <div class="metric-card" style="grid-column:span 3;margin-top:0">
+    <div class="metric-label">Camera — OV3660 Live Stream</div>
+    <img id="camStream"
+         src="http://192.168.1.181:81/stream"
+         style="width:100%;border-radius:8px;margin-top:10px;background:#111620"
+         onerror="this.style.display='none'">
+  </div>
 </div>
 
 <div class="card" style="margin-top:16px">
