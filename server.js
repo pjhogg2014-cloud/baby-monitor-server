@@ -44,7 +44,20 @@ audioServer.on('connection', (ws) => {
     });
     ws.on('close', () => console.log('ESP32 audio disconnected.'));
 });
-
+server.on('upgrade', (request, socket, head) => {
+    const pathname = request.url;
+    if (pathname === '/dashboard') {
+        browserServer.handleUpgrade(request, socket, head, (ws) => {
+            browserServer.emit('connection', ws, request);
+        });
+    } else if (pathname === '/audio') {
+        audioServer.handleUpgrade(request, socket, head, (ws) => {
+            audioServer.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
+});
 // ---- MQTT subscriber ----
 const mqttClient = mqtt.connect('mqtts://55bf30b3bf6c4d7388f56f89e23855bd.s1.eu.hivemq.cloud', {
     port: 8883,
