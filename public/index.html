@@ -109,14 +109,14 @@ ws.onmessage = (event) => {
                 msg.data.object.toFixed(1);
             addPoint(tempChart, msg.data.object);
         }
-        if (msg.topic === 'babymonitor/breathing') {
-            document.getElementById('br').textContent =
-                msg.data.breathing.toFixed(0);
-            document.getElementById('hr').textContent =
-                msg.data.heartrate.toFixed(0);
-            addPoint(brChart, msg.data.breathing);
-            addPoint(hrChart, msg.data.heartrate);
-        }
+        if (msg.topic === 'babymonitor/radar') {
+    document.getElementById('br').textContent =
+        msg.data.breathing.toFixed(0);
+    document.getElementById('hr').textContent =
+        msg.data.heartrate.toFixed(0);
+    addPoint(brChart, msg.data.breathing);
+    addPoint(hrChart, msg.data.heartrate);
+}
         if (msg.topic === 'babymonitor/alerts') {
             const div = document.getElementById('alerts');
             const el = document.createElement('div');
