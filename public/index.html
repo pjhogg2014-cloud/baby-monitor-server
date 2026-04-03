@@ -90,6 +90,13 @@ function addPoint(chart, value) {
 
 // ---- WebSocket to server ----
 const ws = new WebSocket('wss://baby-monitor-server-0st8.onrender.com/dashboard');
+  } else if (request.url === '/dashboard') {
+        browserServer.handleUpgrade(request, socket, head, (ws) => {
+            browserServer.emit('connection', ws, request);
+        });
+    } else {
+        socket.destroy();
+    }
 ws.onopen = () => {
     document.getElementById('status').textContent = 'Connected';
     document.getElementById('dot').classList.remove('offline');
