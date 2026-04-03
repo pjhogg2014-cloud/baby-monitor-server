@@ -12,7 +12,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // ---- WebSocket servers ----
 // One for audio input from ESP32, one for browser dashboards
 const audioServer   = new WebSocketServer({ server, path: '/audio' });
-const browserServer = new WebSocketServer({ server, path: '/dashboard' });
+const browserServer = new WebSocketServer({ server });
 
 let browserClients = new Set();
 let latestData = {
