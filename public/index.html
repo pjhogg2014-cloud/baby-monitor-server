@@ -22,7 +22,7 @@
 </style>
 </head>
 <body>
-<h1> Baby Monitor</h1>
+<h1>🍼 Baby Monitor</h1>
 <p><span class="status-dot" id="dot"></span><span id="status">Connecting...</span></p>
 
 <div class="grid">
@@ -57,25 +57,21 @@
 </div>
 
 <script>
-// ---- Chart setup ----
 function makeChart(id, label, colour) {
     return new Chart(document.getElementById(id), {
         type: 'line',
-        data: {
-            labels: [],
-            datasets: [{ label, data: [], borderColor: colour,
-                         borderWidth: 2, pointRadius: 0, tension: 0.3,
-                         fill: false }]
-        },
+        data: { labels: [], datasets: [{ label, data: [], borderColor: colour,
+                borderWidth: 2, pointRadius: 0, tension: 0.3, fill: false }] },
         options: { animation: false, scales: {
             x: { display: false }, y: { display: true }
         }, plugins: { legend: { display: false } } }
     });
 }
 
-const tempChart = makeChart('tempChart', 'Temp', '#e74c3c');
-const brChart   = makeChart('brChart',   'BR',   '#3498db');
-const hrChart   = makeChart('hrChart',   'HR',   '#2ecc71');
+const tempChart  = makeChart('tempChart',  'Temp',     '#e74c3c');
+const brChart    = makeChart('brChart',    'BR',       '#3498db');
+const hrChart    = makeChart('hrChart',    'HR',       '#2ecc71');
+const audioChart = makeChart('audioChart', 'Waveform', '#9b59b6');
 
 function addPoint(chart, value) {
     const now = new Date().toLocaleTimeString();
@@ -88,15 +84,8 @@ function addPoint(chart, value) {
     chart.update();
 }
 
-// ---- WebSocket to server ----
 const ws = new WebSocket('wss://baby-monitor-server-0st8.onrender.com/dashboard');
-  } else if (request.url === '/dashboard') {
-        browserServer.handleUpgrade(request, socket, head, (ws) => {
-            browserServer.emit('connection', ws, request);
-        });
-    } else {
-        socket.destroy();
-    }
+
 ws.onopen = () => {
     document.getElementById('status').textContent = 'Connected';
     document.getElementById('dot').classList.remove('offline');
@@ -108,21 +97,17 @@ ws.onclose = () => {
 
 ws.onmessage = (event) => {
     const msg = JSON.parse(event.data);
-
     if (msg.type === 'sensor') {
         if (msg.topic === 'babymonitor/temperature') {
-            document.getElementById('temp').textContent =
-                msg.data.object.toFixed(1);
+            document.getElementById('temp').textContent = msg.data.object.toFixed(1);
             addPoint(tempChart, msg.data.object);
         }
         if (msg.topic === 'babymonitor/radar') {
-    document.getElementById('br').textContent =
-        msg.data.breathing.toFixed(0);
-    document.getElementById('hr').textContent =
-        msg.data.heartrate.toFixed(0);
-    addPoint(brChart, msg.data.breathing);
-    addPoint(hrChart, msg.data.heartrate);
-}
+            document.getElementById('br').textContent = msg.data.breathing.toFixed(0);
+            document.getElementById('hr').textContent = msg.data.heartrate.toFixed(0);
+            addPoint(brChart, msg.data.breathing);
+            addPoint(hrChart, msg.data.heartrate);
+        }
         if (msg.topic === 'babymonitor/alerts') {
             const div = document.getElementById('alerts');
             const el = document.createElement('div');
@@ -131,9 +116,7 @@ ws.onmessage = (event) => {
             div.prepend(el);
         }
     }
-
     if (msg.type === 'audio') {
-        // Render waveform on audio chart
         const samples = msg.data.slice(0, 50);
         audioChart.data.labels = samples.map((_, i) => i);
         audioChart.data.datasets[0].data = samples;
@@ -141,16 +124,11 @@ ws.onmessage = (event) => {
     }
 };
 
-// ---- Audio playback ----
-let audioCtx, audioQueue = [];
-
+let audioCtx;
 function startAudio() {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)
-        ({ sampleRate: 16000 });
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
     document.getElementById('audioBtn').textContent = '🔊 Listening...';
 }
-
-const audioChart = makeChart('audioChart', 'Waveform', '#9b59b6');
 </script>
 </body>
 </html>
