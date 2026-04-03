@@ -56,7 +56,7 @@ mqttClient.on('connect', () => {
     console.log('MQTT connected.');
     mqttClient.subscribe([
         'babymonitor/temperature',
-        'babymonitor/breathing',
+        'babymonitor/radar', //had error
         'babymonitor/alerts',
         'babymonitor/status'
     ]);
@@ -65,15 +65,12 @@ mqttClient.on('connect', () => {
 mqttClient.on('message', (topic, message) => {
     try {
         const payload = JSON.parse(message.toString());
-        // Update latest state
         if (topic === 'babymonitor/temperature')
             latestData.temperature = payload;
-        if (topic === 'babymonitor/breathing')
+        if (topic === 'babymonitor/radar')
             latestData.breathing = payload;
         if (topic === 'babymonitor/alerts')
             latestData.alerts.unshift({ ...payload, topic });
-
-        // Forward to all browser dashboards
         const msg = JSON.stringify({ type: 'sensor', topic, data: payload });
         browserClients.forEach(client => {
             if (client.readyState === 1) client.send(msg);
