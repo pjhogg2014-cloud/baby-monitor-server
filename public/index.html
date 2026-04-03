@@ -89,8 +89,7 @@ function addPoint(chart, value) {
 }
 
 // ---- WebSocket to server ----
-const ws = new WebSocket('wss://baby-monitor-server-0st8.onrender.com');
-
+const ws = new WebSocket('wss://baby-monitor-server-0st8.onrender.com/dashboard');
 ws.onopen = () => {
     document.getElementById('status').textContent = 'Connected';
     document.getElementById('dot').classList.remove('offline');
