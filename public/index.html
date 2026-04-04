@@ -9,9 +9,16 @@
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#0a0e14;--surface:#111620;--surface2:#1a2030;--border:#1e2a3a; 
-  --accent:#00c2ff;--accent2:#00ff9d;--warn:#ffb020;--danger:#ff4560;
-  --text:#e2eaf4;--muted:#5a7080;
+  --bg:#f0f4f8;
+  --surface:#ffffff;
+  --surface2:#f0f4f8;
+  --border:#dde3ea;
+  --accent:#0077cc;
+  --accent2:#00a86b;
+  --warn:#d97706;
+  --danger:#dc2626;
+  --text:#1e293b;
+  --muted:#64748b;
   --mono:'DM Mono',monospace;--sans:'Syne',sans-serif;
 }
 body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13px;min-height:100vh}
@@ -24,12 +31,12 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
 .topbar-right{display:flex;align-items:center;gap:14px}
 .time{font-family:var(--mono);font-size:12px;color:var(--muted)}
 .status-pill{display:flex;align-items:center;gap:7px;border-radius:20px;padding:5px 12px;
-  font-family:var(--mono);font-size:11px;background:#0d1f14;border:1px solid #1a3d2a;
+  font-family:var(--mono);font-size:11px;background:#f0fdf4;border:1px solid #bbf7d0;
   color:var(--accent2);transition:all .3s;}
-.status-pill.offline{background:#1f0a0a;border-color:#3d0a0a;color:var(--danger)}
+.status-pill.offline{background:#fff0f0;;border-color:#fecaca;color:var(--danger)}
 .pulse{width:7px;height:7px;border-radius:50%;background:var(--accent2);animation:pulse 1.8s ease-in-out infinite}
 .pulse.offline{background:var(--danger);animation:none}
-@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(0,255,157,.5)}50%{opacity:.7;box-shadow:0 0 0 5px rgba(0,255,157,0)}}
+@keyframes pulse{0%,100%{opacity:1;box-shadow:0 0 0 0 rgba(0,255,20,.5)}50%{opacity:.7;box-shadow:0 0 0 5px rgba(0,255,157,0)}}
 
 .page{padding:20px 24px;display:flex;flex-direction:column;gap:16px}
 
@@ -117,7 +124,7 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:13
       <img id="camStream" src="http://192.168.1.181:81/stream" alt="Camera stream"
            onerror="this.style.display='none';document.getElementById('camOffline').style.display='flex'">
       <div id="camOffline" class="cam-offline" style="display:none">
-        📷 Camera offline — check ESP32 is on the same network
+       Camera offline — check ESP32 is on the same network
       </div>
     </div>
 
@@ -233,8 +240,8 @@ function mkChart(id,datasets,limits){
     type:'line',data:{labels:[],datasets},
     plugins:[limitPlugin(limits)],
     options:{animation:false,responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:datasets.length>1,labels:{color:'#5a7080',font:{family:'DM Mono',size:9},boxWidth:10,padding:8}}},
-      scales:{x:{display:false},y:{ticks:{font:{family:'DM Mono',size:9},color:'#5a7080',maxTicksLimit:5},grid:{color:'#1a2030'}}}}
+      plugins:{legend:{display:datasets.length>1,labels:{color:'#64748b',font:{family:'DM Mono',size:9},boxWidth:10,padding:8}}},
+      scales:{x:{display:false},y:{ticks:{font:{family:'DM Mono',size:9},color:'#64748b',maxTicksLimit:5},grid:{color:'#e2e8f0'}}}}
   });
 }
 
@@ -243,10 +250,10 @@ function mkTempChart(id,datasets,limits){
     type:'line',data:{labels:[],datasets},
     plugins:[limitPlugin(limits)],
     options:{animation:false,responsive:true,maintainAspectRatio:false,
-      plugins:{legend:{display:true,labels:{color:'#5a7080',font:{family:'DM Mono',size:9},boxWidth:10,padding:8}}},
+      plugins:{legend:{display:true,labels:color:'#64748b',font:{family:'DM Mono',size:9},boxWidth:10,padding:8}}},
       scales:{x:{display:false},y:{min:0,max:40,
-        ticks:{font:{family:'DM Mono',size:9},color:'#5a7080',stepSize:5},
-        grid:{color:'#1a2030'}}}}
+        ticks:{font:{family:'DM Mono',size:9},color:'#64748b',stepSize:5},
+       grid:{color:'#e2e8f0'}}}}
   });
 }
 
@@ -261,7 +268,7 @@ const hrChart=mkChart('hrChart',
 const tempChart=mkTempChart('tempChart',
   [
     {label:'Object °C',data:[],borderColor:'#ffb020',borderWidth:1.5,backgroundColor:'rgba(255,176,32,0.07)',fill:true,tension:0.4,pointRadius:0},
-    {label:'Ambient °C',data:[],borderColor:'#5a7080',borderWidth:1,backgroundColor:'transparent',fill:false,tension:0.4,pointRadius:0,borderDash:[4,3]}
+    {label:'Ambient °C',data:[],bordercolor:'#64748b',borderWidth:1,backgroundColor:'transparent',fill:false,tension:0.4,pointRadius:0,borderDash:[4,3]}
   ],
   [
     {val:32,col:'rgba(255,176,32,0.85)',lbl:'Baby min 32°C (when detected)'},
