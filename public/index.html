@@ -352,6 +352,7 @@ function toggleAudio(){
   const btn=document.getElementById('listenBtn');
   if(!audioOn){
     audioCtx=new(window.AudioContext||window.webkitAudioContext)({sampleRate:16000});
+    audioCtx.resume(); // ← add this line
     gainNode=audioCtx.createGain();gainNode.gain.value=vol/100;gainNode.connect(audioCtx.destination);
     audioOn=true;btn.textContent='⏹ Stop Listening';btn.style.background='var(--danger)';
   } else {
