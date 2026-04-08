@@ -80,7 +80,7 @@
     </div>
     <div class="audio-panel">
       <canvas class="audio-vis" id="audioCanvas"></canvas>
-      <button id="audioToggle" onclick="toggleAudio()">🔊 Audio ON</button>
+      <button id="audioToggle" onclick="toggleAudio()">🔊 Click to enable audio</button>
     </div>
   </div>
 </div>
@@ -287,12 +287,21 @@ function connectAudio() {
 function toggleAudio() {
     const btn = document.getElementById('audioToggle');
     if (!audioCtx) {
-        // Creates AudioContext on first user gesture — required by browser autoplay policy
+        // First click: create AudioContext (satisfies browser autoplay policy)
+        // and START playing. Do NOT set audioMuted here — the user clicked
+        // "enable audio", not "mute audio". Previous code did:
+        //   audioMuted = !audioMuted  (false → true)
+        // which immediately muted on the first click, so audio never played.
         audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+        audioMuted = false;
+        btn.textContent = '🔇 Mute';
+        btn.classList.remove('muted');
+    } else {
+        // Subsequent clicks: toggle mute
+        audioMuted = !audioMuted;
+        btn.textContent = audioMuted ? '🔊 Unmute' : '🔇 Mute';
+        btn.classList.toggle('muted', audioMuted);
     }
-    audioMuted = !audioMuted;
-    btn.textContent = audioMuted ? '🔇 Audio OFF' : '🔊 Audio ON';
-    btn.classList.toggle('muted', audioMuted);
 }
 
 function setDot(id, state) {
