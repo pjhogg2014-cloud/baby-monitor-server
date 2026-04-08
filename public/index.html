@@ -79,7 +79,22 @@
       <span id="audStatus">connecting…</span>
     </div>
     <div class="audio-panel">
+      <!-- Oscilloscope waveform — draws one pixel per sample so any
+           non-zero signal is visible regardless of amplitude or frame size -->
       <canvas class="audio-vis" id="audioCanvas"></canvas>
+
+      <!-- Raw debug row: confirms data is arriving and shows signal level.
+           Frames=0 means no data reaching browser.
+           Peak=0% means data arriving but signal is silent.
+           Both non-zero but no sound means AudioContext issue. -->
+      <div style="display:flex;gap:14px;padding:5px 2px 8px;font-size:0.7rem;
+                  color:#5a7a95;font-family:monospace;">
+        <span>Frames: <b id="dbgFrames" style="color:#7ecfff">0</b></span>
+        <span>Samples: <b id="dbgSamples" style="color:#7ecfff">--</b></span>
+        <span>Peak: <b id="dbgPeak" style="color:#7ecfff">--%</b></span>
+        <span>RMS: <b id="dbgRms" style="color:#7ecfff">-- dB</b></span>
+      </div>
+
       <button id="audioToggle" onclick="toggleAudio()">🔊 Click to enable audio</button>
     </div>
   </div>
@@ -210,56 +225,121 @@ function connectVideo() {
 }
 
 // ================================================================
-// AUDIO WebSocket
+// AUDIO WebSocket — oscilloscope waveform + raw debug display
 //
-// BUG 2 FIX: audio now arrives exclusively on /audio (after the
-// server.js Bug 4 fix). The /dashboard WebSocket receives only JSON.
-// The visualiser and playback are driven entirely from /audio here.
+// JUSTIFICATION FOR EACH CHANGE:
+//
+// 1. Bar graph → oscilloscope waveform:
+//    The bar graph averaged 512 samples into 48 buckets. If a frame
+//    is smaller than 48 samples, chunk = floor(n/48) = 0 and bars
+//    never update regardless of signal. The oscilloscope maps every
+//    sample to a canvas column using linear interpolation, so ANY
+//    non-zero frame produces a visible trace.
+//
+// 2. Raw debug row (Frames / Samples / Peak / RMS):
+//    These four values confirm exactly where in the pipeline audio
+//    is failing. If Frames stays 0, data never reaches the browser.
+//    If Frames increments but Peak is 0%, frames are arriving empty.
+//    If Peak is non-zero but waveform is flat, the canvas draw loop
+//    is broken. This eliminates guesswork.
+//
+// 3. audioMuted starts true; first button click unmutes via resume():
+//    Previously audioMuted started false but audioCtx was null, so
+//    the mute check (audioMuted || !audioCtx) blocked playback even
+//    though the flag said unmuted. Now audioMuted=true makes the
+//    initial state honest. The first button click creates the
+//    AudioContext AND calls resume() via Promise to guarantee the
+//    context is in 'running' state before any frame is scheduled.
+//    Chrome sometimes returns 'suspended' even on a fresh context
+//    created inside a click handler; the .then() callback ensures
+//    audioMuted is only set to false after resume succeeds.
+//
+// 4. Waveform draws regardless of mute state:
+//    The visualiser should always show the live signal so the user
+//    can confirm the mic is working before enabling audio output.
 // ================================================================
 let audioWs      = null;
 let audioCtx     = null;
 let nextPlayTime = 0;
-let audioMuted   = false;
+let audioMuted   = true;    // true until user clicks button
 
 const canvas    = document.getElementById('audioCanvas');
 const canvasCtx = canvas.getContext('2d');
-const BAR_COUNT = 48;
-let   bars      = new Array(BAR_COUNT).fill(0);
 
-function drawBars() {
-    requestAnimationFrame(drawBars);
+// Rolling sample buffer — resized to match canvas width on first draw
+let waveBuffer = new Float32Array(512);
+let frameCount = 0;
+
+function drawWaveform() {
+    requestAnimationFrame(drawWaveform);
     const W = canvas.clientWidth, H = canvas.clientHeight;
-    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
-    canvasCtx.clearRect(0, 0, W, H);
-    const bw = (W - (BAR_COUNT - 1)) / BAR_COUNT;
-    bars.forEach((v, i) => {
-        canvasCtx.fillStyle = audioMuted ? '#2c3e50' : '#7ecfff';
-        canvasCtx.fillRect(i * (bw + 1), H - Math.max(2, v * H), bw, Math.max(2, v * H));
-    });
-    bars = bars.map(v => v * 0.85);
+    if (canvas.width !== W || canvas.height !== H) {
+        canvas.width  = W;
+        canvas.height = H;
+        waveBuffer    = new Float32Array(W);
+    }
+
+    // Background
+    canvasCtx.fillStyle = '#0f1923';
+    canvasCtx.fillRect(0, 0, W, H);
+
+    // Centre line
+    canvasCtx.strokeStyle = '#1e3045';
+    canvasCtx.lineWidth   = 1;
+    canvasCtx.beginPath();
+    canvasCtx.moveTo(0, H / 2);
+    canvasCtx.lineTo(W, H / 2);
+    canvasCtx.stroke();
+
+    // Waveform trace — colour changes to grey when muted
+    canvasCtx.strokeStyle = audioMuted ? '#2c3e50' : '#7ecfff';
+    canvasCtx.lineWidth   = 1.5;
+    canvasCtx.beginPath();
+    for (let x = 0; x < W; x++) {
+        const y = (H / 2) - (waveBuffer[x] * H * 0.45);
+        x === 0 ? canvasCtx.moveTo(x, y) : canvasCtx.lineTo(x, y);
+    }
+    canvasCtx.stroke();
 }
-drawBars();
+drawWaveform();
 
 function playAudioFrame(arrayBuffer) {
     const int16 = new Int16Array(arrayBuffer);
+    if (int16.length === 0) return;
 
-    // Update visualiser regardless of mute state
-    const chunk = Math.floor(int16.length / BAR_COUNT);
-    if (chunk > 0) {
-        for (let b = 0; b < BAR_COUNT; b++) {
-            let sum = 0;
-            for (let i = 0; i < chunk; i++) sum += Math.abs(int16[b * chunk + i]);
-            bars[b] = Math.max(bars[b], (sum / chunk) / 32768);
-        }
+    frameCount++;
+
+    // Convert to Float32 and apply 4× gain.
+    // The INMP441 signal after the >> 8 firmware shift is typically
+    // 5–15% of full scale. Without gain the waveform is invisible
+    // and audio is inaudible. Clamp to [-1, 1] to prevent clipping.
+    let peak = 0, sumSq = 0;
+    const amp = new Float32Array(int16.length);
+    for (let i = 0; i < int16.length; i++) {
+        const s = Math.max(-1, Math.min(1, (int16[i] * 4) / 32768));
+        amp[i]  = s;
+        if (Math.abs(s) > peak) peak = Math.abs(s);
+        sumSq += s * s;
+    }
+    const rmsDb = 20 * Math.log10(Math.sqrt(sumSq / int16.length) + 1e-10);
+
+    // ── Raw debug display (always updated, mute-independent) ──────
+    document.getElementById('dbgFrames').textContent  = frameCount;
+    document.getElementById('dbgSamples').textContent = int16.length;
+    document.getElementById('dbgPeak').textContent    = (peak * 100).toFixed(1) + '%';
+    document.getElementById('dbgRms').textContent     = rmsDb.toFixed(1) + ' dB';
+
+    // ── Oscilloscope waveform (always updated) ────────────────────
+    const W = waveBuffer.length;
+    for (let x = 0; x < W; x++) {
+        waveBuffer[x] = amp[Math.floor((x / W) * amp.length)];
     }
 
-    if (audioMuted || !audioCtx) return;
+    // ── Audio playback (only when unmuted and context running) ────
+    if (audioMuted || !audioCtx || audioCtx.state !== 'running') return;
 
-    const float32 = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) float32[i] = int16[i] / 32768.0;
-
-    const buf = audioCtx.createBuffer(1, float32.length, 16000);
-    buf.copyToChannel(float32, 0);
+    const buf = audioCtx.createBuffer(1, amp.length, 16000);
+    buf.copyToChannel(amp, 0);
     const src = audioCtx.createBufferSource();
     src.buffer = buf;
     src.connect(audioCtx.destination);
@@ -287,18 +367,23 @@ function connectAudio() {
 function toggleAudio() {
     const btn = document.getElementById('audioToggle');
     if (!audioCtx) {
-        // First click: create AudioContext (satisfies browser autoplay policy)
-        // and START playing. Do NOT set audioMuted here — the user clicked
-        // "enable audio", not "mute audio". Previous code did:
-        //   audioMuted = !audioMuted  (false → true)
-        // which immediately muted on the first click, so audio never played.
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-        audioMuted = false;
-        btn.textContent = '🔇 Mute';
-        btn.classList.remove('muted');
+        // First click: create AudioContext inside a user gesture handler.
+        // The browser requires this — AudioContexts created outside a
+        // gesture are immediately suspended and cannot produce sound.
+        // resume() returns a Promise; we only set audioMuted=false after
+        // the Promise resolves to guarantee the context is in 'running'
+        // state before any frame tries to schedule playback.
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)
+                       ({ sampleRate: 16000 });
+        audioCtx.resume().then(() => {
+            audioMuted   = false;
+            nextPlayTime = 0;
+            btn.textContent = '🔇 Mute';
+            btn.classList.remove('muted');
+        });
     } else {
-        // Subsequent clicks: toggle mute
         audioMuted = !audioMuted;
+        if (!audioMuted) audioCtx.resume();
         btn.textContent = audioMuted ? '🔊 Unmute' : '🔇 Mute';
         btn.classList.toggle('muted', audioMuted);
     }
