@@ -23,7 +23,7 @@ C++ Code
 9. EvaluateAlerts: Checks for various alert conditions (fever, hypothermia, apnea, bradypnea, tachypnea, bradycardia,     tachycardia) and sends an alert if any condition is met.
 
 --SMTP Email--
-1. SendEmail: Sends an alert email directly over SMTP/SMTPS, including the email headers, plain-text body, and HTML body.
+SendEmail: Sends an alert email directly over SMTP/SMTPS, including the email headers, plain-text body, and HTML body.
 The flow diagram provides a comprehensive overview of the system's functionality, including the setup process, the main loop that handles sensor data acquisition, processing, and communication, and the SMTP email sending mechanism for alert notifications.
 The subgraphs and their detailed explanations help to clearly understand the purpose and implementation of each major component of the system. The diagram also highlights the key fixes and improvements made in the current version compared to the previous one, such as the I2S audio capture changes, MQTT reconnection handling, and the switch to WebSocket-based video streaming.
 Overall, this detailed Mermaid flow diagram, along with the integrated code explanations, provides a valuable resource for understanding the structure, logic, and functionality of the Baby Vital Monitor firmware.
