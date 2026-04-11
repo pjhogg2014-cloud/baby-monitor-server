@@ -7,7 +7,7 @@ C++ Code
 4. InitI2S: Configures the I2S settings for the INMP441 microphone, including the 32-bit mode, sample rate, and DMA buffer.
 5. ConnectWiFi: Connects the device to the configured WiFi network and prints the connected IP address.
 6. SyncNTP: Synchronizes the device's time with NTP servers.
-7. ConnectMQTT: Connects the device to the MQTT broker, handling any connection failures.
+7. ConnectMQTT: Connects the device to the MQTT broker and handles connection failures.
 8. ConnectAudio: Connects the device to the audio WebSocket server, generating a random WebSocket key and handling the handshake response.
 9. ConnectVideo: Connects the device to the video WebSocket server, generating a random WebSocket key and handling the handshake response.
 
