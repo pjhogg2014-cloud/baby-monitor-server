@@ -116,21 +116,11 @@
 <script>
 const SERVER = 'wss://baby-monitor-server-0st8.onrender.com';
 
-// ================================================================
 // DASHBOARD WebSocket — receives JSON sensor messages from server.
-//
-// BUG 1 FIX: server wraps every MQTT publish as:
-//   { type: "sensor", topic: "babymonitor/temperature", data: { object: 36.5, ... } }
-// The old handler looked for d.object at the top level — that field
-// never exists there. Values are inside d.data. Fixed below.
-//
-// BUG 3 FIX: on connect the server sends an initial state snapshot:
-//   { type: "state", data: { temperature: {...}, breathing: 18, ... } }
-// The old handler had no case for type === "state". Added below.
-// ================================================================
 let dashWs = null;
 
-function connectDash() {
+function connectDash() 
+    {
     dashWs = new WebSocket(SERVER + '/dashboard');
     dashWs.onopen  = () => setDot('mqttDot', 'connected');
     dashWs.onclose = () => { setDot('mqttDot', ''); setTimeout(connectDash, 4000); };
